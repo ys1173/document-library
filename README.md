@@ -4,18 +4,23 @@ Search your shared drives from AI agents, without copying the files out of the d
 
 The service indexes documents where they already live (file shares, SharePoint, S3 and so on). It stores searchable text and vectors, plus a pointer back to each file. When an agent wants to read a document, the service fetches the live original.
 
-- **Search:** semantic and keyword search together, with results in many languages.
-- **Exact references:** every result says which document and which page, slide, sheet or section it came from.
-- **Stays in sync:** new, changed, moved and deleted files are picked up automatically, and it can notify you through a webhook.
-- **Handles scans:** text extraction goes first. Pages it can't read well fall back to OCR and a vision model.
-- **Runs anywhere:** works without internet access or a GPU, and each model can run on another machine.
-- **For agents and services:** agents use REST or MCP (read-only). Other services add new document sources with one API call.
+**Key features**
+
+- **Connect to almost any storage with a few lines of config.** Adapters are built on [rclone](https://rclone.org/overview/), so SMB shares, SharePoint, S3, SeaweedFS, SFTP, WebDAV, Google Drive and many more all work the same way. A new connection is a short declarative definition, in a config file or through one API call, with no code to write.
+- **Swap in better models as they appear.** The text extractor, vision model and embedding model are all replaceable through configuration, and each can run on this machine, on a remote GPU or as a service you already have. When a better extraction model comes out, you can switch to it without rebuilding the system.
+- **Agents connect over MCP.** Agents get search and reading as MCP tools, and the same API is available over REST.
+- **Exact references.** Every result says which document and which page, slide, sheet or section it came from, and that reference opens the live file.
+- **Semantic and keyword search together**, with results across languages.
+- **Stays in sync.** New, changed, moved and deleted files are picked up automatically, and it can notify you through a webhook.
+- **Handles scans.** Text extraction goes first, and pages it can't read well fall back to OCR and a vision model.
+- **Runs anywhere.** It works without internet access or a GPU.
 
 ## Contents
 
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
 - [Using your own documents](#using-your-own-documents)
+- [Connecting an agent over MCP](#connecting-an-agent-over-mcp)
 - [What agents get back](#what-agents-get-back)
 - [Adding sources with the connector API](#adding-sources-with-the-connector-api)
 - [Models: run your own or use existing ones](#models-run-your-own-or-use-existing-ones)
@@ -204,9 +209,59 @@ The folder is mounted read-only, and files must be readable by all users on your
 
 To change settings such as how often it scans or which files it includes, edit [deploy/config.compose.yaml](deploy/config.compose.yaml). [config.example.yaml](config.example.yaml) lists every option, and any option can be set by an environment variable: `DOCLIB_WORKER__CONCURRENCY=4` sets `worker.concurrency`.
 
+## Connecting an agent over MCP
+
+The service is an MCP server, using the streamable HTTP transport. Once it's running, the address is:
+
+```
+http://localhost:8080/mcp
+```
+
+Agents get five read-only tools: `search_docs`, `open_doc`, `get_doc_outline`, `list_sources` and `index_status`. They can't add sources or change anything.
+
+**To connect**, add the address to your agent's MCP settings. Many clients use a format like this, but check your client's documentation for its exact format:
+
+```json
+{
+  "mcpServers": {
+    "document-library": {
+      "type": "http",
+      "url": "http://localhost:8080/mcp"
+    }
+  }
+}
+```
+
+In Claude Code, it's this command:
+
+```bash
+claude mcp add --transport http document-library http://localhost:8080/mcp
+```
+
+**To test it from Python**, install the client with `pip install "mcp<2"`, then run:
+
+```python
+import asyncio
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+
+async def main():
+    async with streamablehttp_client("http://localhost:8080/mcp") as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            tools = await session.list_tools()
+            print([tool.name for tool in tools.tools])
+            result = await session.call_tool("search_docs", {"query": "how do I restart the SMF pods?", "top_k": 2})
+            print(result.content[0].text)
+
+asyncio.run(main())
+```
+
+**With auth turned on**, each client must send the token as a header: `Authorization: Bearer <token>`. See [Before production](#before-production).
+
 ## What agents get back
 
-Agents use the API on port 8080, as REST or as an MCP server at `/mcp`. Both behave the same.
+REST and MCP behave the same, and these are the tools on each:
 
 | Tool | REST | Purpose |
 |---|---|---|
@@ -560,7 +615,7 @@ The embedding service can't be reached, so search is running on keywords only. R
 
 ## Current status and limits
 
-The core service is built and tested, including connectors, notifications and the vision service. 235 tests pass, and the full stack passes its end-to-end checks with real models.
+The core service is built and tested, including connectors, notifications, the MCP server and the vision service. 235 tests pass, and the full stack passes its end-to-end checks with real models.
 
 **Not yet tested on real systems:**
 
