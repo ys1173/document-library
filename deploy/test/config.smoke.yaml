@@ -1,0 +1,23 @@
+tenant_id: default
+sources:
+  - id: share
+    rclone_remote: local
+    root_path: /data/share
+    scan_interval: 5s
+    exclude: ["**/~$*", "**/Archive/**"]
+extraction:
+  vlm:
+    enabled: true
+    endpoint: http://vision:8000/v1
+    model: zai-org/GLM-OCR
+    concurrency: 1
+    timeout_s: 500
+embeddings:
+  endpoint: http://embed:8080/v1
+  model: BAAI/bge-m3
+  dimension: 1024
+notifications:
+  webhook:
+    enabled: true
+    url: http://webhook:9000/hook
+    digest_max_wait: 5s

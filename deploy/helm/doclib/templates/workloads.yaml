@@ -1,0 +1,122 @@
+{{- $root := . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: doclib-scanner}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: doclib-scanner}}
+  template:
+    metadata: {labels: {app: doclib-scanner}}
+    spec:
+      {{- include "doclib.pod" (dict "root" $root "name" "scanner" "args" (list "scanner") "dsn" .Values.secrets.workerDsn "resources" .Values.scanner.resources) | nindent 6 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: doclib-worker}
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector: {matchLabels: {app: doclib-worker}}
+  template:
+    metadata: {labels: {app: doclib-worker}}
+    spec:
+      {{- include "doclib.pod" (dict "root" $root "name" "worker" "args" (list "worker") "dsn" .Values.secrets.workerDsn "resources" .Values.worker.resources) | nindent 6 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: doclib-api}
+spec:
+  replicas: {{ .Values.api.replicas }}
+  selector: {matchLabels: {app: doclib-api}}
+  template:
+    metadata: {labels: {app: doclib-api}}
+    spec:
+      {{- include "doclib.pod" (dict "root" $root "name" "api" "args" (list "api") "dsn" .Values.secrets.apiDsn "resources" .Values.api.resources "ports" (list (dict "containerPort" .Values.api.port))) | nindent 6 }}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: doclib-api}
+spec:
+  selector: {app: doclib-api}
+  ports:
+    - {port: {{ .Values.api.port }}, targetPort: {{ .Values.api.port }}}
+{{- if .Values.admin.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: doclib-admin}
+spec:
+  replicas: {{ .Values.admin.replicas }}
+  selector: {matchLabels: {app: doclib-admin}}
+  template:
+    metadata: {labels: {app: doclib-admin}}
+    spec:
+      {{- include "doclib.pod" (dict "root" $root "name" "admin" "args" (list "admin-api") "dsn" .Values.secrets.workerDsn "resources" .Values.admin.resources "ports" (list (dict "containerPort" .Values.admin.port)) "extraEnv" (dict "DOCLIB_ADMIN__PORT" .Values.admin.port)) | nindent 6 }}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: doclib-admin}
+spec:
+  type: ClusterIP
+  selector: {app: doclib-admin}
+  ports:
+    - {port: {{ .Values.admin.port }}, targetPort: {{ .Values.admin.port }}}
+{{- end }}
+{{- if include "doclib.visionOn" . }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: doclib-vlm-worker}
+spec:
+  replicas: {{ .Values.vision.workerReplicas }}
+  selector: {matchLabels: {app: doclib-vlm-worker}}
+  template:
+    metadata: {labels: {app: doclib-vlm-worker}}
+    spec:
+      {{- include "doclib.pod" (dict "root" $root "name" "vlm-worker" "args" (list "vlm-worker") "dsn" .Values.secrets.workerDsn) | nindent 6 }}
+{{- end }}
+{{- if eq (toString .Values.vision.mode) "local" }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: doclib-vision}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: doclib-vision}}
+  template:
+    metadata: {labels: {app: doclib-vision}}
+    spec:
+      containers:
+        - name: vision
+          image: "{{ .Values.vision.image.repository }}:{{ .Values.vision.image.tag }}"
+          ports: [{containerPort: 8000}]
+          securityContext: {readOnlyRootFilesystem: true, allowPrivilegeEscalation: false}
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8000}
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          {{- if .Values.vision.gpu }}
+          env: [{name: VISION_DEVICE, value: cuda}]
+          resources: {limits: {nvidia.com/gpu: 1}}
+          {{- else }}
+          resources: {requests: {cpu: "2", memory: 6Gi}, limits: {memory: 7Gi}}
+          {{- end }}
+          volumeMounts:
+            - {name: models, mountPath: /models, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+            - {name: home, mountPath: /home/vision}
+      volumes:
+        - name: models
+          persistentVolumeClaim: {claimName: {{ .Values.vision.modelsClaim }}}
+        - name: tmp
+          emptyDir: {medium: Memory}
+        - name: home
+          emptyDir: {medium: Memory}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: doclib-vision}
+spec:
+  selector: {app: doclib-vision}
+  ports:
+    - {port: 8000, targetPort: 8000}
+{{- end }}

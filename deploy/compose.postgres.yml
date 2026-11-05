@@ -1,0 +1,29 @@
+# Adds a bundled Postgres with pgvector, for small sites and testing. Leave this file out to use an existing cluster.
+# Must come after docker-compose.yml:  -f deploy/docker-compose.yml -f deploy/compose.postgres.yml
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: doclib
+      POSTGRES_PASSWORD_FILE: /run/secrets/doclib_admin_password
+    secrets: [doclib_admin_password, doclib_worker_password, doclib_api_password]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d doclib"]
+      interval: 5s
+      retries: 20
+
+  migrate:
+    depends_on:
+      postgres: {condition: service_healthy}
+
+volumes:
+  pgdata:
+
+secrets:
+  doclib_admin_password: {file: ./secrets/admin_password}
+  doclib_worker_password: {file: ./secrets/worker_password}
+  doclib_api_password: {file: ./secrets/api_password}

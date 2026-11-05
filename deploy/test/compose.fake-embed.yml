@@ -1,0 +1,14 @@
+# A deterministic stand-in for fast smoke tests. Paths are relative to deploy/.
+services:
+  embed:
+    image: doclib-test-tests
+    command: ["python", "-m", "uvicorn", "tests.fakes.smoke_embed:app", "--host", "0.0.0.0", "--port", "8080"]
+    volumes: ["../tests:/src/tests:ro"]
+    working_dir: /src
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8080/docs', timeout=3)"]
+      interval: 3s
+      retries: 30
+  worker:
+    depends_on:
+      embed: {condition: service_healthy}

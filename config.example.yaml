@@ -1,0 +1,93 @@
+# Document Library configuration. Every value can be overridden by the environment:
+# DOCLIB_WORKER__CONCURRENCY=4 sets worker.concurrency. Secrets come from files, never inline.
+tenant_id: acme
+
+postgres:
+  dsn_file: /run/secrets/doclib_dsn   # any Postgres 16+ with pgvector; see "Using an existing Postgres" in the README
+
+rclone_config_file: /run/secrets/rclone.conf
+
+sources:
+  - id: ops-share
+    rclone_remote: smb-ops            # an rclone remote, or "local" for a plain path
+    root_path: /Operations
+    include: ["**"]
+    exclude: ["**/~$*", "**/.DS_Store", "**/Archive/**"]
+    tags: ["type:ops"]
+    path_tags:
+      Vendors/Acme/: ["vendor:acme"]
+    scan_interval: 15m
+    max_file_size_mb: 200
+  - id: sharepoint-noc
+    rclone_remote: sp-noc
+    root_path: /Shared Documents/NOC
+    scan_interval: 15m
+    tps_limit: 5                      # SharePoint and Google Drive throttle
+  # Declarative, with no rclone.conf. Other services can create these through the admin API instead.
+  - id: seaweed-ops
+    type: s3                          # any rclone backend
+    root_path: team-docs/ops
+    options: {provider: SeaweedFS, endpoint: "http://seaweedfs:8333"}
+    credentials:                      # rclone option -> environment variable NAME. Values are never stored.
+      access_key_id: DOCLIB_CRED_SEAWEED_ACCESS
+      secret_access_key: DOCLIB_CRED_SEAWEED_SECRET
+
+extraction:
+  text:
+    backend: xberg                    # xberg, http (with endpoint), or my_package.my_module:MyBackend
+    # endpoint: http://extract:8090/v1
+  ocr_fallback: tesseract
+  ocr_languages: [eng, jpn]
+  router:
+    min_chars_per_page: 50
+    image_area_ratio: 0.6
+    garbled_ratio: 0.05
+  vlm:
+    enabled: false                    # true needs doclib-vlm-worker and a vision server
+    endpoint: http://vision:8000/v1   # local CPU container, or https://gpu-host/v1 for a remote GPU
+    # api_key_file: /run/secrets/vision_api_key
+    model: zai-org/GLM-OCR
+    prompt: "Text Recognition:"
+    concurrency: 1                    # 1 on CPU; about 8 on a GPU
+    timeout_s: 900
+    render_dpi: 170
+
+chunking:
+  target_tokens: 600
+  overlap_tokens: 50
+
+embeddings:
+  endpoint: http://embed:8080/v1
+  model: BAAI/bge-m3
+  dimension: 1024
+  batch_size: 64
+
+notifications:
+  webhook:
+    enabled: false
+    url_file: /run/secrets/doclib_webhook_url
+    # secret_file: /run/secrets/doclib_webhook_secret   # optional HMAC signing
+    digest_max_wait: 5m
+    max_changes_per_message: 500
+
+logging:
+  level: INFO
+  file: null                          # optional rotating file; JSON always goes to stdout
+
+telemetry:
+  otlp_endpoint: null                 # set to http://otel-collector:4318 to export telemetry over OTLP
+
+# Agent-facing API.
+auth:
+  mode: none                          # none (dev only), header (gateway over mTLS), or bearer (signed token)
+
+# Service-to-service connector API. Separate port and auth, and never exposed to agents.
+admin:
+  port: 8081
+  auth:
+    mode: none                        # Set to bearer for production; tokens then need the doclib:admin scope.
+    # token_secret_file: /run/secrets/doclib_admin_token_secret
+
+connectors:
+  credential_env_prefix: DOCLIB_CRED_ # Connectors can only read environment variables with this prefix.
+  # allowed_types: [s3, smb, webdav, sftp, onedrive, ...]  # local and wrapper backends are excluded by default

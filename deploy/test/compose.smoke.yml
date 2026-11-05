@@ -1,0 +1,22 @@
+# End-to-end smoke test: the real product image and real vision model, with a fake embedding server.
+# Paths are relative to deploy/, the directory of the first compose file.
+x-config: &config ./test/config.smoke.yaml:/etc/doclib/config.yaml:ro
+x-vision-key: &vision-key ./secrets/vision_api_key:/run/secrets/vision_api_key:ro
+services:
+  webhook:
+    image: doclib-test-tests
+    command: ["python", "-m", "uvicorn", "tests.fakes.smoke_embed:hook_app", "--host", "0.0.0.0", "--port", "9000"]
+    volumes: ["../tests:/src/tests:ro"]
+    working_dir: /src
+  migrate: {volumes: [*config]}
+  scanner: {volumes: [*config]}
+  worker: {volumes: [*config]}
+  api:
+    volumes: [*config, *vision-key]
+    environment: &vision-env
+      DOCLIB_EXTRACTION__VLM__ENDPOINT: "${SMOKE_VISION_URL:-http://vision:8000/v1}"
+      DOCLIB_EXTRACTION__VLM__API_KEY_FILE: "${SMOKE_VISION_KEY_FILE:-}"
+  admin: {volumes: [*config]}
+  vlm-worker:
+    volumes: [*config, *vision-key]
+    environment: *vision-env

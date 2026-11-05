@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+*.egg-info/
+.DS_Store
+# Generated passwords and database connection strings. Never commit these.
+secrets/
+deploy/secrets/
+deploy/sample-share/
+deploy/models/

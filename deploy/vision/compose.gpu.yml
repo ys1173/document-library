@@ -1,0 +1,26 @@
+# Remote GPU host: copy this folder and the weights to the GPU machine, then:
+#   mkdir -p secrets && openssl rand -hex 32 > secrets/vision_api_key
+#   docker compose -f compose.gpu.yml up -d
+# Then set extraction.vlm.endpoint to https://<gpu-host>/v1 on the doclib side, with the same API key.
+# Page images cross the network, so put TLS in front of this port (a reverse proxy, or a private VPN/WireGuard link).
+services:
+  vision:
+    build:
+      context: .
+      args:
+        TORCH_INDEX: https://download.pytorch.org/whl/cu124
+    image: doclib-vision:gpu
+    restart: unless-stopped
+    gpus: all
+    ports: ["8000:8000"]
+    volumes:
+      - ${VISION_MODELS_DIR:-./models}:/models:ro
+    environment:
+      VISION_DEVICE: cuda
+      VISION_API_KEY_FILE: /run/secrets/vision_api_key
+    secrets: [vision_api_key]
+    read_only: true
+    tmpfs: ["/tmp", "/home/vision"]
+secrets:
+  vision_api_key:
+    file: ./secrets/vision_api_key

@@ -1,0 +1,41 @@
+# Adds the vision model on local CPU. It needs about 6 GB of memory for itself: on an 8 GB Docker VM alongside the
+# rest of the stack it was OOM-killed, so give Docker at least 12 GB, or run it on another machine. For a remote GPU, skip this file's `vision` service, run
+# deploy/vision/compose.gpu.yml on the GPU machine, and point DOCLIB_EXTRACTION__VLM__ENDPOINT at it.
+services:
+  vision:
+    image: doclib-vision:cpu
+    build:
+      context: ./vision
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp", "/home/vision"]
+    mem_limit: 7g
+    volumes: ["${VISION_MODELS:-doclib-vision-models}:/models:ro"]
+
+  vlm-worker:
+    image: doclib:0.1.0
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp", "/home/doclib"]
+    command: ["vlm-worker"]
+    env_file:
+      - {path: ./secrets/connectors.env, required: false}
+    volumes:
+      - ./config.compose.yaml:/etc/doclib/config.yaml:ro
+      - ${DOCLIB_SHARE:-../examples/sample-docs}:/data/share:ro
+    environment:
+      DOCLIB_CONFIG: /etc/doclib/config.yaml
+      DOCLIB_POSTGRES__DSN_FILE: /run/secrets/doclib_worker_dsn
+      DOCLIB_EXTRACTION__VLM__ENABLED: "true"
+    secrets: [doclib_worker_dsn]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+
+  # Workers must know vision is on, so they queue upgrades for hard pages.
+  worker:
+    environment:
+      DOCLIB_EXTRACTION__VLM__ENABLED: "true"
+
+volumes:
+  doclib-vision-models:
+    external: true

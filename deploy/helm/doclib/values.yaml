@@ -1,0 +1,72 @@
+image:
+  repository: doclib
+  tag: 0.1.0
+  pullPolicy: IfNotPresent
+
+# Existing Secrets, created by your installer or vault integration. Secrets are never put in values.
+# The chart has no database of its own: the three DSNs point at your existing cluster.
+# Prepare it once with deploy/postgres/existing-cluster.sql.
+secrets:
+  workerDsn: doclib-worker-dsn   # key: dsn. The read-write role.
+  apiDsn: doclib-api-dsn         # key: dsn. The read-only role.
+  adminDsn: doclib-admin-dsn     # key: dsn. Schema owner (doclib_owner), used only by the migration job.
+  rcloneConfig: doclib-rclone    # key: rclone.conf. Optional: connectors don't need it.
+  connectorEnv: ""               # Secret whose keys are DOCLIB_CRED_* variables, given to every doclib process.
+                                 # Changing it needs a rollout, because env vars are read at process start.
+  webhook: ""                    # keys: url and optionally secret. Set it when notifications are enabled.
+
+# Rendered as the doclib config file. See config.example.yaml in the repository for every option.
+config:
+  tenant_id: default
+  rclone_config_file: /run/secrets/rclone/rclone.conf
+  sources: []
+  extraction:
+    vlm:
+      enabled: false
+      endpoint: http://doclib-vision:8000/v1
+  embeddings:
+    endpoint: http://embed:8080/v1
+    model: BAAI/bge-m3
+    dimension: 1024
+  logging:
+    level: INFO
+
+worker:
+  replicas: 2
+  resources:
+    requests: {cpu: "1", memory: 1Gi}
+    limits: {memory: 2Gi}
+
+api:
+  replicas: 2
+  port: 8080
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {memory: 1Gi}
+
+scanner:
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 1Gi}
+
+# Connector management for platform services. A separate, cluster-internal Service: never route agents to it.
+admin:
+  enabled: true
+  replicas: 1
+  port: 8081
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {memory: 1Gi}
+
+# Where the vision model runs:
+#   off:    no vision model. Hard pages stay on OCR.
+#   local:  run it in this cluster. Set gpu: true to schedule on a GPU node.
+#   remote: run it elsewhere, such as deploy/vision/compose.gpu.yml, and set config.extraction.vlm.endpoint to its URL.
+vision:
+  mode: "off"
+  gpu: false
+  image:
+    repository: doclib-vision
+    tag: cpu
+  modelsClaim: doclib-vision-models  # PersistentVolumeClaim holding the weights at GLM-OCR/
+  workerReplicas: 1

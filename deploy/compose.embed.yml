@@ -1,0 +1,26 @@
+# Adds our own embedding model. Leave this file out when pointing at an existing embedding service:
+#   DOCLIB_EMBEDDINGS_URL=https://embeddings.internal/v1 docker compose -f deploy/docker-compose.yml up -d
+# The model uses about 3 GB of memory. Fetch the weights first: scripts/fetch-models.sh
+services:
+  embed:
+    image: doclib-embed:cpu
+    build:
+      context: ./embed
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp", "/home/embed"]
+    volumes: ["${EMBED_MODELS:-doclib-embed-models}:/models:ro"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  # Start indexing only once the model has loaded, rather than retrying a minute later.
+  worker:
+    depends_on:
+      embed: {condition: service_healthy}
+
+volumes:
+  doclib-embed-models:
+    external: true

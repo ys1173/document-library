@@ -1,0 +1,6 @@
+apiVersion: v2
+name: doclib
+description: Document Library. Indexes shared drives in place and serves hybrid search over REST and MCP.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

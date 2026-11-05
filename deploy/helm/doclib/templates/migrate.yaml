@@ -1,0 +1,14 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: doclib-migrate
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: Never
+      {{- include "doclib.pod" (dict "root" . "name" "migrate" "args" (list "migrate") "dsn" .Values.secrets.adminDsn "noCredentials" true) | nindent 6 }}

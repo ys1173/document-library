@@ -1,0 +1,9 @@
+{
+  "identities": [
+    {
+      "name": "doclib-test",
+      "credentials": [{"accessKey": "testaccess", "secretKey": "testsecret"}],
+      "actions": ["Admin", "Read", "List", "Tagging", "Write"]
+    }
+  ]
+}

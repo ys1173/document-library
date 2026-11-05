@@ -1,0 +1,21 @@
+# Used by deploy/docker-compose.yml. Copy and adapt: see ../config.example.yaml for every option.
+tenant_id: default
+sources:
+  - id: share
+    rclone_remote: local
+    root_path: /data/share
+    scan_interval: 15m
+extraction:
+  vlm:
+    enabled: false   # compose.vision.yml turns this on through DOCLIB_EXTRACTION__VLM__ENABLED
+    endpoint: http://vision:8000/v1
+    concurrency: 1
+embeddings:
+  endpoint: http://embed:8080/v1
+  model: BAAI/bge-m3
+  dimension: 1024
+notifications:
+  webhook:
+    enabled: false   # Set url_file to your receiver and turn this on.
+logging:
+  level: INFO
