@@ -6,8 +6,11 @@ import argparse
 import asyncio
 import json
 import sys
+import time
+from pathlib import Path
 
 import asyncpg
+import jwt
 
 from . import scanner, worker
 from .config import Settings, load_settings
@@ -78,6 +81,17 @@ async def _reindex(settings: Settings, args: argparse.Namespace) -> None:
     await _with_pool(settings, run)
 
 
+def _admin_token(settings: Settings, subject: str, days: float) -> str:
+    auth = settings.admin.auth
+    if auth.mode != "bearer" or not auth.token_secret_file:
+        raise SystemExit("admin.auth.mode must be bearer, with token_secret_file set")
+    claims: dict[str, object] = {"sub": subject, "tenant_id": settings.tenant_id, "scope": settings.admin.required_scope,
+                                 "exp": int(time.time() + days * 86400)}
+    if auth.token_audience:
+        claims["aud"] = auth.token_audience
+    return jwt.encode(claims, Path(auth.token_secret_file).read_text(encoding="utf-8").strip(), algorithm="HS256")
+
+
 async def _check(settings: Settings) -> int:
     """Run after changing endpoints. Reports every problem at once, rather than leaving jobs waiting."""
     report: dict[str, object] = {}
@@ -129,6 +143,9 @@ def main(argv: list[str] | None = None) -> None:
     commands.add_parser("vlm-worker", help="Run a background vision model worker")
     commands.add_parser("api", help="Run the REST and MCP API")
     commands.add_parser("admin-api", help="Run the service-to-service connector API")
+    token = commands.add_parser("admin-token", help="Print a signed token for the admin API and admin MCP tools")
+    token.add_argument("--subject", required=True, help="Who the token is for. Appears in the logs of what they do.")
+    token.add_argument("--days", type=float, default=30, help="Days until it expires (default 30)")
     commands.add_parser("extract-server", help="Serve the configured text backend over HTTP, for remote deployment")
     scan = commands.add_parser("scan", help="Scan once and exit")
     scan.add_argument("--source")
@@ -190,6 +207,8 @@ def main(argv: list[str] | None = None) -> None:
             asyncio.run(_with_pool(settings, run_drain))
         case "reindex":
             asyncio.run(_reindex(settings, args))
+        case "admin-token":
+            print(_admin_token(settings, args.subject, args.days))
 
 
 if __name__ == "__main__":

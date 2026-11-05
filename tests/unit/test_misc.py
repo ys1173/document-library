@@ -220,3 +220,12 @@ def test_merged_results_cite_all_their_pages():
     headed = [{**_row(2, 0.9), "anchor": "heading:4.2", "page_start": None, "page_end": None},
               {**_row(3, 0.8), "anchor": "heading:4.2", "page_start": None, "page_end": None}]
     assert group_adjacent(headed)[0]["anchor"] == "heading:4.2"
+
+
+def test_log_fields_named_like_logrecord_attributes_do_not_raise(caplog):
+    from doclib.log import event
+
+    with caplog.at_level("INFO", logger="doclib"):
+        event("reserved.fields", created=True, module="x", msg="y", args="z", message="m")
+    record = next(r for r in caplog.records if r.getMessage() == "reserved.fields")
+    assert record.created_ is True and record.module_ == "x" and record.message_ == "m"

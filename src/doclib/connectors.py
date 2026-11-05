@@ -240,7 +240,7 @@ class ConnectorService:
                     "scan_requested_at) values ($1, $2, $3, $4, $5, 'api', now())",
                     connector_id, tenant_id, remote_name(source), source.root_path, config)
         created = existing is None
-        event("connector.applied", connector_id=connector_id, tenant_id=tenant_id, type=spec.type, created=created, caller=caller)
+        event("connector.applied", connector_id=connector_id, tenant_id=tenant_id, type=spec.type, newly_created=created, caller=caller)
         return await self.get(connector_id, tenant_id), created
 
     async def delete(self, connector_id: str, tenant_id: str, *, caller: str = "unknown") -> dict[str, int]:

@@ -68,13 +68,13 @@ services:
       migrate: {condition: service_completed_successfully}
 
   admin:
-    # Connector management for other services. Published on localhost only: never make it reachable by agents.
+    # Connector management for other services. Published on localhost only: never make it reachable by ordinary agents.
     <<: *doclib
     command: ["admin-api"]
     secrets: [doclib_worker_dsn]
     depends_on:
       migrate: {condition: service_completed_successfully}
-    ports: ["127.0.0.1:8081:8081"]  # Service-to-service only. Never expose this to agents.
+    ports: ["127.0.0.1:8081:8081"]  # Services, plus a setup agent if compose.admin-mcp.yml is used. Not ordinary agents.
 
 secrets:
   doclib_admin_dsn: {file: ./secrets/admin_dsn}

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import os
 import subprocess
 import time
@@ -242,3 +244,122 @@ async def test_bad_credentials_surface_on_the_status(admin, bucket, pool, settin
         await scan_source(pool, settings, rclone, source)
     status = admin.get("/v1/connectors/seaweed-ops").json()["status"]
     assert status["last_scan_ok"] is False and "DOCLIB_CRED_S3_SECRET" in status["last_scan_error"]
+
+
+# The admin MCP tools, over the real ASGI app and a real SeaweedFS.
+
+MCP_HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+SETUP_TOOLS = {"list_connection_profiles", "list_connectors", "get_connector", "validate_connector", "create_connector", "scan_connector"}
+
+
+@pytest.fixture
+def mcp_admin(share, embed_server, pool, tmp_path):
+    secret_file = tmp_path / "secret"
+    secret_file.write_text("s" * 40)
+    profile = {key: spec()[key] for key in ("type", "options", "credentials")}
+    secured = build_settings(embed_server.url, default_source(share), admin={
+        "auth": {"mode": "bearer", "token_secret_file": str(secret_file)},
+        "mcp": {"enabled": True, "profiles": {"team": {**profile, "description": "Team bucket", "allowed_roots": [f"{BUCKET}/ops"]}}}})
+    with TestClient(create_admin_app(secured)) as client:
+        yield client
+
+
+def bearer(**claims) -> dict:
+    token = jwt.encode({"tenant_id": "acme", "sub": "setup-agent", "exp": time.time() + 60, **claims}, "s" * 40, algorithm="HS256")
+    return {**MCP_HEADERS, "Authorization": f"Bearer {token}"}
+
+
+def rpc(client, method: str, params: dict | None = None, headers: dict | None = None):
+    return client.post("/mcp", headers=headers or bearer(scope="doclib:admin"),
+                       json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}})
+
+
+def tool(client, name: str, **arguments) -> dict:
+    reply = rpc(client, "tools/call", {"name": name, "arguments": arguments})
+    assert reply.status_code == 200, reply.text
+    return json.loads(reply.json()["result"]["content"][0]["text"])
+
+
+def connector_ids(client) -> set[str]:
+    return {c["id"] for c in tool(client, "list_connectors")["connectors"]}
+
+
+def test_admin_mcp_is_absent_unless_turned_on(admin):
+    assert admin.post("/mcp", headers=MCP_HEADERS, json={}).status_code in {404, 405}
+
+
+def test_admin_mcp_needs_a_token_with_the_admin_scope(mcp_admin):
+    assert rpc(mcp_admin, "tools/list", headers=MCP_HEADERS).status_code == 401
+    assert rpc(mcp_admin, "tools/list", headers=bearer()).status_code == 403
+    assert rpc(mcp_admin, "tools/list", headers=bearer(scope="doclib:read")).status_code == 403
+    assert rpc(mcp_admin, "tools/list").status_code == 200
+
+
+def test_admin_mcp_can_add_but_not_change_or_remove(mcp_admin):
+    tools = rpc(mcp_admin, "tools/list").json()["result"]["tools"]
+    assert {t["name"] for t in tools} == SETUP_TOOLS
+    create = next(t for t in tools if t["name"] == "create_connector")
+    assert set(create["inputSchema"]["properties"]) == {"connector_id", "profile", "root_path", "include", "exclude", "tags"}
+
+
+def test_profiles_are_listed_without_their_destination_or_credentials(mcp_admin):
+    assert tool(mcp_admin, "list_connection_profiles") == {"profiles": [
+        {"name": "team", "description": "Team bucket", "type": "s3", "allowed_roots": [f"{BUCKET}/ops"]}]}
+
+
+async def test_agent_adds_a_source_over_mcp_and_it_becomes_searchable(mcp_admin, pool, settings, rclone, embedder, library, bucket):
+    assert tool(mcp_admin, "validate_connector", connector_id="team-ops", profile="team", root_path=f"{BUCKET}/ops") == {
+        "valid": True, "connection": {"ok": True, "message": None}}
+    assert connector_ids(mcp_admin) == {"ops"}  # Validating stores nothing. "ops" is the test config's own source.
+
+    created = tool(mcp_admin, "create_connector", connector_id="team-ops", profile="team", root_path=f"{BUCKET}/ops", tags=["team:ops"])
+    assert created["id"] == "team-ops" and created["spec"]["options"]["endpoint"] == ENDPOINT and created["spec"]["tags"] == ["team:ops"]
+    assert tool(mcp_admin, "get_connector", connector_id="team-ops")["id"] == "team-ops"
+    assert tool(mcp_admin, "scan_connector", connector_id="team-ops") == {"scan_requested": True}
+
+    await index_connector(pool, settings, rclone, embedder, "team-ops")
+    results = (await library.search_docs("acme", "quokka alarms", filters=_only("team-ops")))["results"]
+    assert results[0]["citation"]["path"] == "notes.md"
+
+
+def test_agent_cannot_pick_its_own_destination(mcp_admin, bucket):
+    created = tool(mcp_admin, "create_connector", connector_id="team-ops", profile="team", root_path=f"{BUCKET}/ops",
+                   type="sftp", options={"endpoint": "http://attacker.example"}, endpoint="http://attacker.example",
+                   credentials={"access_key_id": "DOCLIB_CRED_S3_SECRET"})
+    assert created["spec"]["type"] == "s3" and created["spec"]["options"]["endpoint"] == ENDPOINT
+    assert created["spec"]["credentials"]["access_key_id"] == "DOCLIB_CRED_S3_ACCESS"
+
+
+def test_agent_is_refused_outside_its_profile(mcp_admin, bucket):
+    for root in (BUCKET, f"{BUCKET}/hr", f"{BUCKET}/ops/../hr"):
+        reply = tool(mcp_admin, "create_connector", connector_id="team-hr", profile="team", root_path=root)
+        assert reply["error"]["code"] == "root_not_allowed"
+    assert tool(mcp_admin, "validate_connector", connector_id="team-hr", profile="team", root_path=f"{BUCKET}/hr")["error"]["code"] == "root_not_allowed"
+    assert tool(mcp_admin, "create_connector", connector_id="x-y", profile="nope", root_path="a")["error"]["code"] == "unknown_profile"
+    assert connector_ids(mcp_admin) == {"ops"}
+
+
+def test_agent_cannot_overwrite_an_existing_connector(mcp_admin, bucket):
+    other = spec(root_path=f"{BUCKET}/ops/Vendors", tags=["owner:platform"])
+    assert mcp_admin.put("/v1/connectors/platform-docs", json=other, headers=bearer(scope="doclib:admin")).status_code == 201
+    reply = tool(mcp_admin, "create_connector", connector_id="platform-docs", profile="team", root_path=f"{BUCKET}/ops")
+    assert reply["error"]["code"] == "already_exists"
+    assert mcp_admin.get("/v1/connectors/platform-docs", headers=bearer(scope="doclib:admin")).json()["spec"]["tags"] == ["owner:platform"]
+
+
+def test_admin_mcp_tenant_comes_from_the_token(mcp_admin, bucket):
+    tool(mcp_admin, "create_connector", connector_id="team-ops", profile="team", root_path=f"{BUCKET}/ops")
+    other = rpc(mcp_admin, "tools/call", {"name": "list_connectors", "arguments": {}}, headers=bearer(scope="doclib:admin", tenant_id="other"))
+    assert json.loads(other.json()["result"]["content"][0]["text"]) == {"connectors": []}
+
+
+def test_creating_connectors_works_with_info_logging(mcp_admin, bucket):
+    # Other tests log at WARNING. This once failed only at INFO, after the connector had been stored.
+    logger = logging.getLogger("doclib")
+    logger.setLevel(logging.INFO)
+    try:
+        assert "id" in tool(mcp_admin, "create_connector", connector_id="team-ops", profile="team", root_path=f"{BUCKET}/ops")
+        reply = mcp_admin.put("/v1/connectors/by-rest", json=spec(), headers=bearer(scope="doclib:admin"))
+        assert reply.status_code == 201, reply.text
+    finally:
+        logger.setLevel(logging.NOTSET)

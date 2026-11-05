@@ -92,7 +92,9 @@ def setup_logging(service: str, level: str = "INFO", file: str | None = None,
 
 
 def event(name: str, *, level: int = logging.INFO, logger: str = "doclib", exc_info: Any = None, **fields: Any) -> None:
-    logging.getLogger(logger).log(level, name, extra=fields, exc_info=exc_info)
+    # logging raises on a field named like a LogRecord attribute, and a log line must never break the work it reports.
+    safe = {f"{key}_" if key in _RESERVED else key: value for key, value in fields.items()}
+    logging.getLogger(logger).log(level, name, extra=safe, exc_info=exc_info)
 
 
 def safe_error(exc: BaseException, limit: int = 200) -> str:

@@ -143,14 +143,14 @@ This service, the **Document Library**, makes shared-drive documents searchable 
 5. **Mass-delete guard:** if a listing would delete more than `max_delete_ratio` of a source's files (default 0.5), the scan aborts and logs an error, so an unmounted share cannot empty the index. An admin can override this through the CLI.
 
 ### 5.3 Connectors (declarative sources)
-Other platform services add sources through a **separate admin API** (`doclib admin-api`). It has its own port and auth and no MCP, so agents can't add sources (§16).
+Other platform services add sources through a **separate admin API** (`doclib admin-api`). It has its own port and auth, so ordinary agents can't add sources (§16). An operator can turn on narrower MCP tools on that port for a trusted setup agent: it needs a token with the admin scope, can only add connectors from operator-approved connection profiles, and can't update or delete. Profiles fix the destination and credentials, so a misled agent can't send a credential to its own server or index an unapproved location.
 
 - **Declarative:** a connector is `type` (any allowed rclone backend), `root_path`, non-secret `options`, and `credentials`. Types and options are validated against rclone's own catalogue (`rclone config providers`), so a backend rclone supports works with no code change. `PUT` is idempotent, and errors share one shape.
 - **Credentials:** `credentials` maps an rclone option to an **environment variable name**. Values are never stored or returned, and reach rclone through its environment, not its command line. Names must carry the `DOCLIB_CRED_` prefix, so a caller can't request this service's own secrets. Secrets in `options` are refused.
 - **Allowed types** are configuration. `local` and wrapper backends (`alias`, `crypt`, `union` and so on) are excluded because they could read this service's own files.
 - **No restart:** Postgres is the registry that every process reads, and the scanner reconciles its scan loops against it. A new environment variable does need a restart, because environments are fixed at process start.
 
-The admin API uses the read-write database role. It must not be exposed to agents.
+The admin API uses the read-write database role. It must not be exposed to ordinary agents.
 
 ### 5.2 Change notifications (webhook)
 Every detected change is indexed automatically and reported through **one standard outbound webhook**. The service only knows the webhook; the receiver decides which channels (chat, email, ticketing) to use.
@@ -552,7 +552,7 @@ telemetry:
 - Temporary files go in tmpfs or scratch, are deleted after each job and are cleaned on startup.
 - **Prompt-injection hygiene:** document text is untrusted. MCP responses must return content in clearly delimited data fields (never in tool descriptions or system-style text), and include `"content_is_untrusted": true`. No component of this service may follow instructions found in documents.
 - Optional (default off): redact secrets such as passwords, keys and tokens in chunk text at index time, using a pattern list. Many runbooks contain credentials, so this should be easy to switch on.
-- The agent-facing API is read-only, uses a read-only DB role, and has no administrative endpoints. Admin actions go through the CLI or, for connectors, the separate service-to-service admin API (§5.3).
+- The agent-facing API is read-only, uses a read-only DB role, and has no administrative endpoints. Admin actions go through the CLI or, for connectors, the separate admin API (§5.3), including its optional MCP tools for a trusted setup agent.
 
 ---
 

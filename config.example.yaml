@@ -81,12 +81,24 @@ telemetry:
 auth:
   mode: none                          # none (dev only), header (gateway over mTLS), or bearer (signed token)
 
-# Service-to-service connector API. Separate port and auth, and never exposed to agents.
+# Service-to-service connector API. Separate port and auth. Only a trusted setup agent should ever reach it, through mcp below.
 admin:
   port: 8081
   auth:
     mode: none                        # Set to bearer for production; tokens then need the doclib:admin scope.
     # token_secret_file: /run/secrets/doclib_admin_token_secret
+  # MCP tools at /mcp on this port, so a trusted setup agent can add sources. Off by default, and needs mode: bearer.
+  # Agents can only choose a profile and a folder it allows. They can't set endpoints or credentials, update or delete.
+  # mcp:
+  #   enabled: true
+  #   profiles:
+  #     team-bucket:
+  #       description: Team documents in SeaweedFS
+  #       type: s3
+  #       options: {provider: SeaweedFS, endpoint: "http://seaweedfs:8333"}
+  #       credentials: {access_key_id: DOCLIB_CRED_SEAWEED_ACCESS, secret_access_key: DOCLIB_CRED_SEAWEED_SECRET}
+  #       allowed_roots: [team-docs/ops]   # Or ["*"] for the whole store.
+  #       scan_interval: 15m
 
 connectors:
   credential_env_prefix: DOCLIB_CRED_ # Connectors can only read environment variables with this prefix.

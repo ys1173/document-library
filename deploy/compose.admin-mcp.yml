@@ -1,0 +1,13 @@
+# Turns on token auth for the admin API, and its MCP tools for a trusted setup agent, at http://localhost:8081/mcp.
+# Define what agents may connect to under admin.mcp.profiles in config.compose.yaml. See the README.
+# Mint a token with:  docker compose -p doclib exec admin doclib admin-token --subject setup-agent
+services:
+  admin:
+    environment:
+      DOCLIB_ADMIN__MCP__ENABLED: "true"
+      DOCLIB_ADMIN__AUTH__MODE: bearer
+      DOCLIB_ADMIN__AUTH__TOKEN_SECRET_FILE: /run/secrets/doclib_admin_token_secret
+    secrets: [doclib_worker_dsn, doclib_admin_token_secret]
+
+secrets:
+  doclib_admin_token_secret: {file: ./secrets/admin_token_secret}

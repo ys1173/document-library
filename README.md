@@ -8,7 +8,7 @@ The service indexes documents where they already live (file shares, SharePoint, 
 
 - **Connect to almost any storage with a few lines of config.** Adapters are built on [rclone](https://rclone.org/overview/), so SMB shares, SharePoint, S3, SeaweedFS, SFTP, WebDAV, Google Drive and many more all work the same way. A new connection is a short declarative definition, in a config file or through one API call, with no code to write.
 - **Swap in better models as they appear.** The text extractor, vision model and embedding model are all replaceable through configuration, and each can run on this machine, on a remote GPU or as a service you already have. When a better extraction model comes out, you can switch to it without rebuilding the system.
-- **Agents connect over MCP.** Agents get search and reading as MCP tools, and the same API is available over REST.
+- **Agents connect over MCP.** Agents get search and reading as MCP tools, and the same API is available over REST. If you choose, a trusted setup agent can also add sources over MCP, limited to locations you've approved.
 - **Exact references.** Every result says which document and which page, slide, sheet or section it came from, and that reference opens the live file.
 - **Semantic and keyword search together**, with results across languages.
 - **Stays in sync.** New, changed, moved and deleted files are picked up automatically, and it can notify you through a webhook.
@@ -23,6 +23,7 @@ The service indexes documents where they already live (file shares, SharePoint, 
 - [Connecting an agent over MCP](#connecting-an-agent-over-mcp)
 - [What agents get back](#what-agents-get-back)
 - [Adding sources with the connector API](#adding-sources-with-the-connector-api)
+- [Letting a setup agent add sources](#letting-a-setup-agent-add-sources)
 - [Models: run your own or use existing ones](#models-run-your-own-or-use-existing-ones)
 - [Using an existing Postgres](#using-an-existing-postgres)
 - [Change notifications](#change-notifications)
@@ -359,6 +360,79 @@ The default list is in `connectors.allowed_types`. `local` and wrapper backends 
 
 You can also declare sources in the config file, with the same fields under `sources:`. See [config.example.yaml](config.example.yaml).
 
+## Letting a setup agent add sources
+
+Ordinary agents can only search and read. You can also give one trusted agent separate MCP tools for adding sources, at `http://localhost:8081/mcp`. These tools are off by default.
+
+They're narrower than the REST API above, because a document an agent reads could try to talk it into something. You approve each storage location in advance as a **connection profile**, which fixes its address and credentials. The agent can only choose a profile and a folder that profile allows.
+
+| An agent can | An agent can't |
+|---|---|
+| See the approved profiles, and existing connectors with their status | Set an address, connector type or credentials |
+| Check that a connector would work | Index a folder outside the profile's `allowed_roots` |
+| Add a connector from a profile, with a folder, tags and file filters | Change or overwrite an existing connector |
+| Start a scan | Delete anything. Use the REST API for that, or for changes |
+
+**Everything an agent adds becomes searchable by every agent using the library**, so only list folders in `allowed_roots` that all of them may read.
+
+### Turning it on
+
+1. Add the credentials to `deploy/secrets/connectors.env`, as described under [Credentials](#credentials).
+
+2. Define what agents may connect to in `deploy/config.compose.yaml`:
+
+   ```yaml
+   admin:
+     mcp:
+       profiles:
+         team-bucket:
+           description: Team documents in SeaweedFS
+           type: s3
+           options: {provider: SeaweedFS, endpoint: "http://seaweedfs:8333"}
+           credentials: {access_key_id: DOCLIB_CRED_SEAWEED_ACCESS, secret_access_key: DOCLIB_CRED_SEAWEED_SECRET}
+           allowed_roots: [team-docs/ops]   # This folder and those inside it. ["*"] allows the whole store.
+           scan_interval: 15m
+   ```
+
+3. Start the service with the admin tools on:
+
+   ```bash
+   scripts/up.sh --admin-mcp
+   ```
+
+   This also turns on token auth for the whole admin API, so REST callers on port 8081 need a token from now on. The tools won't start without it.
+
+4. Create a token for the agent. The subject appears in the logs next to everything the agent does:
+
+   ```bash
+   docker compose -p doclib exec -T admin doclib admin-token --subject setup-agent --days 30
+   ```
+
+5. Connect the agent, using a different server name from its search connection:
+
+   ```bash
+   claude mcp add --transport http document-library-admin http://localhost:8081/mcp --header "Authorization: Bearer <token>"
+   ```
+
+A profile change needs a restart of the admin service. So does a new credential, on every doclib process.
+
+Outside Docker Compose, set `admin.mcp.enabled: true` and `admin.auth.mode: bearer` with a `token_secret_file`, and add `admin.mcp.profiles` to your config.
+
+### Tools
+
+| Tool | What it does |
+|---|---|
+| `list_connection_profiles` | Lists approved profiles and the folders each allows |
+| `list_connectors` | Lists connectors with their definitions and status |
+| `get_connector` | Shows one connector's definition and status |
+| `validate_connector` | Checks a connector and that its folder is readable, storing nothing |
+| `create_connector` | Adds a connector. Scanning starts straight away |
+| `scan_connector` | Scans now, rather than at the next interval |
+
+Refusals come back as `{"error": {"code": "...", "message": "...", "details": ...}}`. They're also logged as `admin.mcp_refused`, and additions are logged as `connector.applied` with the caller `mcp:<subject>`. Repeated refusals can be a sign of a misled agent, so they're worth an alert.
+
+Keep the agent's token away from other agents, and keep port 8081 away from them too. There's no way yet to revoke one token on its own: to cancel tokens early, change the signing secret, which cancels them all. So keep expiry times short.
+
 ## Models: run your own or use existing ones
 
 All models sit behind a URL, so each one can run on this machine, on another machine or in a service you already have.
@@ -529,7 +603,7 @@ The quick start is for trying things out on your own machine. Before running thi
 
 - [ ] **Turn on auth for the agent API.** Set `auth.mode` to `bearer` (signed tokens with a `tenant_id` claim) or `header` (behind a gateway using mTLS). The default is `none`.
 - [ ] **Turn on auth for the admin API.** Set `admin.auth.mode` to `bearer`. Tokens also need the `doclib:admin` scope.
-- [ ] **Keep the admin API away from agents.** Only other services should be able to reach port 8081.
+- [ ] **Keep the admin API away from ordinary agents.** Only other services, and a setup agent if you [use one](#letting-a-setup-agent-add-sources), should be able to reach port 8081.
 - [ ] **Use read-only credentials for every source.** The service only ever reads, but the credential should enforce that too.
 - [ ] **Decide about source permissions.** In this version, every agent can search everything indexed. Permissions are captured where available, but they aren't enforced.
 - [ ] **Bundle the weights for air-gapped sites.** Build with `--build-arg BAKE_MODEL=BAAI/bge-m3`. Nothing is downloaded at runtime.
@@ -575,6 +649,7 @@ src/doclib/          The service
   library.py         Search and reading, shared by REST and MCP
   api.py             Agent-facing API
   admin_api.py       Connector API
+  admin_mcp.py       Optional connector tools for a setup agent
   connectors.py      Connector validation, using rclone's catalogue
   rclone.py          Read-only source access
   notify.py          Webhook notifications
@@ -615,7 +690,7 @@ The embedding service can't be reached, so search is running on keywords only. R
 
 ## Current status and limits
 
-The core service is built and tested, including connectors, notifications, the MCP server and the vision service. 235 tests pass, and the full stack passes its end-to-end checks with real models.
+The core service is built and tested, including connectors, notifications, both MCP servers and the vision service. 270 tests pass, and the full stack passes its end-to-end checks with real models.
 
 **Not yet tested on real systems:**
 

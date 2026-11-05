@@ -1,7 +1,8 @@
 """doclib-admin: the service-to-service API for other parts of the platform to manage connectors.
 
-This is deliberately separate from the agent-facing API (spec section 16): its own port, its own auth, and no MCP.
-Agents search and read; only platform services can add sources. The OpenAPI schema is at /openapi.json.
+This is deliberately separate from the agent-facing API (spec section 16): its own port and its own auth. Agents
+search and read there. Only platform services use these REST routes, and a trusted setup agent can get the narrower
+tools in admin_mcp.py if an operator turns them on. The OpenAPI schema is at /openapi.json.
 """
 
 
@@ -15,6 +16,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from .admin_mcp import McpAdminGuard, build_admin_mcp
 from .auth import Authenticator, AuthError, Identity
 from .config import Settings
 from .connectors import (
@@ -56,29 +58,36 @@ def create_admin_app(settings: Settings) -> FastAPI:
     authenticator = Authenticator(settings.admin.auth, settings.tenant_id)
     if settings.admin.auth.mode == "none":
         event("admin.unauthenticated", level=30, error="admin.auth.mode is none: use this only for local development")
+    mcp = build_admin_mcp(lambda: state["service"], settings.admin.mcp) if settings.admin.mcp.enabled else None
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         pool = await create_pool(settings)
         state["service"] = ConnectorService(pool, Rclone(settings.rclone_binary, settings.rclone_config_file), settings.connectors)
-        event("admin.started", auth_mode=settings.admin.auth.mode)
-        yield
+        event("admin.started", auth_mode=settings.admin.auth.mode, mcp_enabled=mcp is not None)
+        if mcp:
+            async with mcp.session_manager.run():
+                yield
+        else:
+            yield
         await pool.close()
 
     app = FastAPI(title="Document Library: admin", version="1", lifespan=lifespan,
                   description="Create and manage source connectors. Any allowed rclone backend works with a declarative call.")
 
-    def identity(request: Request) -> Identity:
-        headers = {k.lower(): v for k, v in request.headers.items()}
+    def authorise(headers: dict[str, str], path: str) -> Identity:
         try:
             found = authenticator.identify(headers)
         except AuthError as exc:
-            event("admin.auth_rejected", level=30, reason=str(exc), path=request.url.path)
+            event("admin.auth_rejected", level=30, reason=str(exc), path=path)
             raise ConnectorError("unauthorized", "authentication required", status=401) from exc
         if settings.admin.auth.mode == "bearer" and settings.admin.required_scope not in found.scopes:
-            event("admin.scope_rejected", level=30, caller=found.caller, path=request.url.path)
+            event("admin.scope_rejected", level=30, caller=found.caller, path=path)
             raise ConnectorError("forbidden", f"token lacks the {settings.admin.required_scope} scope", status=403)
         return found
+
+    def identity(request: Request) -> Identity:
+        return authorise({k.lower(): v for k, v in request.headers.items()}, request.url.path)
 
     Caller = Annotated[Identity, Depends(identity)]
 
@@ -161,4 +170,6 @@ def create_admin_app(settings: Settings) -> FastAPI:
         await service().request_scan(connector_id, caller.tenant_id, caller=caller.caller)
         return ScanResponse()
 
+    if mcp:
+        app.mount("/", McpAdminGuard(mcp.streamable_http_app(), authorise))  # MCP at /mcp. Mounted last so REST routes win.
     return app

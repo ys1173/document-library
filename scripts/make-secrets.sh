@@ -14,5 +14,6 @@ done
 [ -f "$dir/admin_dsn" ] || printf 'postgresql://postgres:%s@postgres:5432/doclib\n' "$(cat "$dir/admin_password")" > "$dir/admin_dsn"
 [ -f "$dir/worker_dsn" ] || printf 'postgresql://doclib_worker:%s@postgres:5432/doclib\n' "$(cat "$dir/worker_password")" > "$dir/worker_dsn"
 [ -f "$dir/api_dsn" ] || printf 'postgresql://doclib_api:%s@postgres:5432/doclib\n' "$(cat "$dir/api_password")" > "$dir/api_dsn"
+[ -f "$dir/admin_token_secret" ] || openssl rand -hex 32 > "$dir/admin_token_secret"  # Signs tokens for the admin API.
 chmod 644 "$dir"/*   # Containers read these as a different user; the directory itself is private.
 echo "secrets written to $dir"

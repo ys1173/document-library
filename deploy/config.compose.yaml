@@ -17,5 +17,15 @@ embeddings:
 notifications:
   webhook:
     enabled: false   # Set url_file to your receiver and turn this on.
+# What a setup agent may connect to, used with compose.admin-mcp.yml. See "Letting a setup agent add sources" in the README.
+# admin:
+#   mcp:
+#     profiles:
+#       team-bucket:
+#         description: Team documents in SeaweedFS
+#         type: s3
+#         options: {provider: SeaweedFS, endpoint: "http://seaweedfs:8333"}
+#         credentials: {access_key_id: DOCLIB_CRED_SEAWEED_ACCESS, secret_access_key: DOCLIB_CRED_SEAWEED_SECRET}
+#         allowed_roots: [team-docs/ops]
 logging:
   level: INFO

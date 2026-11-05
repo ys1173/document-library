@@ -227,6 +227,24 @@ class AuthConfig(Strict):
         return v
 
 
+class ConnectionProfile(Strict):
+    """A destination an operator approves for agents. They choose the profile and a folder, and nothing else about it."""
+
+    description: str = ""
+    type: str
+    options: dict[str, str | int | float | bool] = Field(default_factory=dict)
+    credentials: dict[str, str] = Field(default_factory=dict)  # rclone option -> environment variable NAME
+    allowed_roots: list[str] = Field(min_length=1)  # Folders agents may index, or ["*"] for the whole store.
+    scan_interval: str | int = "15m"
+
+
+class AdminMcpConfig(Strict):
+    """MCP tools on the admin port for a trusted setup agent. Off unless turned on."""
+
+    enabled: bool = False
+    profiles: dict[str, ConnectionProfile] = Field(default_factory=dict)
+
+
 class AdminConfig(Strict):
     """The service-to-service admin API (connectors). Separate from the agent-facing API, on its own port."""
 
@@ -234,6 +252,14 @@ class AdminConfig(Strict):
     port: int = 8081
     auth: AuthConfig = Field(default_factory=AuthConfig)
     required_scope: str = "doclib:admin"  # In bearer mode, tokens must carry this in their `scope` claim.
+    mcp: AdminMcpConfig = Field(default_factory=AdminMcpConfig)
+
+    @model_validator(mode="after")
+    def _mcp_needs_tokens(self) -> AdminConfig:
+        # Only bearer tokens carry the admin scope, so that's the only mode that can tell a setup agent from any other.
+        if self.mcp.enabled and self.auth.mode != "bearer":
+            raise ValueError("admin.mcp.enabled requires admin.auth.mode: bearer")
+        return self
 
 
 class WorkerConfig(Strict):

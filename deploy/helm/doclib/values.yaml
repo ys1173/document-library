@@ -49,7 +49,7 @@ scanner:
     requests: {cpu: 100m, memory: 256Mi}
     limits: {memory: 1Gi}
 
-# Connector management for platform services. A separate, cluster-internal Service: never route agents to it.
+# Connector management for platform services. A separate, cluster-internal Service: never route ordinary agents to it.
 admin:
   enabled: true
   replicas: 1
