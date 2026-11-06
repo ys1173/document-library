@@ -29,7 +29,10 @@ from .connectors import (
     backend_summary,
 )
 from .db import create_pool
+from .embeddings import EmbeddingClient
+from .library import Library
 from .log import event
+from .portal import create_portal_router
 from .rclone import Rclone
 
 ConnectorId = Annotated[str, Path(description="Lowercase letters, digits and hyphens.")]
@@ -54,7 +57,7 @@ class ScanResponse(BaseModel):
 
 
 def create_admin_app(settings: Settings) -> FastAPI:
-    state: dict[str, ConnectorService] = {}
+    state: dict[str, Any] = {}
     authenticator = Authenticator(settings.admin.auth, settings.tenant_id)
     if settings.admin.auth.mode == "none":
         event("admin.unauthenticated", level=30, error="admin.auth.mode is none: use this only for local development")
@@ -63,13 +66,19 @@ def create_admin_app(settings: Settings) -> FastAPI:
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         pool = await create_pool(settings)
-        state["service"] = ConnectorService(pool, Rclone(settings.rclone_binary, settings.rclone_config_file), settings.connectors)
-        event("admin.started", auth_mode=settings.admin.auth.mode, mcp_enabled=mcp is not None)
+        rclone = Rclone(settings.rclone_binary, settings.rclone_config_file)
+        embedder = EmbeddingClient(settings.embeddings)
+        state["service"] = ConnectorService(pool, rclone, settings.connectors)
+        state["library"] = Library(pool, settings, rclone, embedder)
+        state["embedder"] = embedder
+        event("admin.started", auth_mode=settings.admin.auth.mode, mcp_enabled=mcp is not None,
+              portal_enabled=settings.admin.portal.enabled)
         if mcp:
             async with mcp.session_manager.run():
                 yield
         else:
             yield
+        await embedder.aclose()
         await pool.close()
 
     app = FastAPI(title="Document Library: admin", version="1", lifespan=lifespan,
@@ -98,7 +107,7 @@ def create_admin_app(settings: Settings) -> FastAPI:
     async def access_log(request: Request, call_next):
         started = time.monotonic()
         response = await call_next(request)
-        if request.url.path != "/healthz":
+        if request.url.path not in {"/healthz", "/portal/api/status"}:  # The status page polls.
             event("admin.request", method=request.method, path=request.url.path, status=response.status_code,
                   duration_ms=round((time.monotonic() - started) * 1000, 1))
         return response
@@ -170,6 +179,8 @@ def create_admin_app(settings: Settings) -> FastAPI:
         await service().request_scan(connector_id, caller.tenant_id, caller=caller.caller)
         return ScanResponse()
 
+    if settings.admin.portal.enabled:
+        app.include_router(create_portal_router(settings, state))
     if mcp:
         app.mount("/", McpAdminGuard(mcp.streamable_http_app(), authorise))  # MCP at /mcp. Mounted last so REST routes win.
     return app

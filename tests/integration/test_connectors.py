@@ -363,3 +363,17 @@ def test_creating_connectors_works_with_info_logging(mcp_admin, bucket):
         assert reply.status_code == 201, reply.text
     finally:
         logger.setLevel(logging.NOTSET)
+
+
+async def test_portal_adds_scans_and_deletes_a_source(admin, bucket, pool, settings, rclone, embedder):
+    headers = {"X-Portal": "1"}
+    body = {"id": "from-portal", **spec()}
+    assert admin.post("/portal/api/connectors/test", json=body, headers=headers).json() == {"ok": True, "message": None}
+    assert admin.post("/portal/api/connectors", json=body, headers=headers).status_code == 201
+    assert admin.post("/portal/api/connectors", json=body, headers=headers).status_code == 409
+    await index_connector(pool, settings, rclone, embedder, "from-portal")
+    listed = {c["id"]: c for c in admin.get("/portal/api/connectors").json()["connectors"]}
+    assert listed["from-portal"]["status"]["files_by_status"]["indexed"] == 2
+    assert admin.post("/portal/api/connectors/from-portal/scan", headers=headers).status_code == 202
+    assert admin.delete("/portal/api/connectors/from-portal", headers=headers).json()["files_removed"] == 2
+

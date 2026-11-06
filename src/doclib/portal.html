@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Document Library</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #fff; color: #111; font: 14px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  header { border-bottom: 1px solid #ccc; padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 6px 20px; align-items: baseline; }
+  header strong { margin-right: 12px; }
+  nav a { margin-right: 14px; color: #111; text-decoration: none; }
+  nav a.on { text-decoration: underline; font-weight: 600; }
+  main { max-width: 1000px; padding: 16px; }
+  h2 { font-size: 14px; margin: 24px 0 6px; }
+  h2:first-child { margin-top: 0; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 5px 12px 5px 0; border-bottom: 1px solid #e3e3e3; vertical-align: top; }
+  th { font-weight: 600; border-bottom-color: #999; white-space: nowrap; }
+  td.num, th.num { text-align: right; }
+  td.actions { white-space: nowrap; text-align: right; padding-right: 0; }
+  label { display: block; margin: 8px 0; }
+  label span { display: block; margin-bottom: 2px; }
+  label.check { display: flex; gap: 6px; align-items: center; }
+  label.check span { margin: 0; }
+  input[type=text], select { width: 100%; max-width: 480px; padding: 4px 6px; border: 1px solid #999; border-radius: 2px; font: inherit; background: #fff; color: inherit; }
+  button { padding: 3px 10px; border: 1px solid #888; border-radius: 2px; background: #f4f4f4; color: inherit; font: inherit; cursor: pointer; }
+  button:hover { background: #e8e8e8; }
+  button:disabled { color: #888; cursor: default; }
+  td button { margin-left: 4px; }
+  form > button { margin: 6px 6px 0 0; }
+  .row { display: flex; gap: 6px; max-width: 480px; }
+  .bad { color: #b00020; }
+  .ok { color: #1b6e2c; }
+  .muted { color: #666; }
+  .msg { margin: 8px 0; min-height: 1.45em; white-space: pre-wrap; }
+  .result { margin: 10px 0; }
+  .result p { margin: 2px 0; }
+  summary { cursor: pointer; margin: 8px 0; }
+</style>
+</head>
+<body>
+<header>
+  <strong>Document Library</strong>
+  <nav id="nav"></nav>
+</header>
+<main id="main"></main>
+<script>
+"use strict";
+const main = document.getElementById("main");
+// Options most connections need. Anything else a backend offers goes under "More options".
+const COMMON = new Set(["provider", "endpoint", "region", "access_key_id", "secret_access_key", "host", "port", "user", "pass", "url", "vendor", "account", "key", "domain"]);
+const PAGES = { status: ["Status", showStatus], sources: ["Sources", showSources], webhook: ["Webhook", showWebhook], models: ["Models", showModels] };
+let timer = null;
+
+// Text from documents and sources only ever reaches the page as text nodes.
+function h(tag, props, ...children) {
+  const el = document.createElement(tag);
+  for (const [key, value] of Object.entries(props || {})) {
+    if (key.startsWith("on")) el.addEventListener(key.slice(2), value);
+    else if (key in el && key !== "list") el[key] = value;
+    else el.setAttribute(key, value);
+  }
+  el.append(...children.flat().filter(c => c !== null && c !== undefined).map(c => c instanceof Node ? c : String(c)));
+  return el;
+}
+
+async function api(path, method, body) {
+  const options = { method: method || "GET", headers: { "X-Portal": "1" } };
+  if (body !== undefined) {
+    options.headers["Content-Type"] = "application/json";
+    options.body = JSON.stringify(body);
+  }
+  const response = await fetch("/portal/api/" + path, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = data.error || {};
+    const details = Array.isArray(error.details) ? error.details.join("\n")
+      : typeof error.details === "string" ? error.details : "";
+    throw new Error(details || error.message || "Request failed (" + response.status + ")");
+  }
+  return data;
+}
+
+function when(value) { return value ? new Date(value).toLocaleString() : "-"; }
+
+function table(headers, rows) {
+  return h("div", { className: "scroll" }, h("table", null,
+    h("thead", null, h("tr", null, headers.map(([label, cls]) => h("th", { className: cls || "" }, label)))),
+    h("tbody", null, rows)));
+}
+
+function say(el, text, cls) { el.textContent = text; el.className = "msg " + (cls || ""); }
+
+function guarded(button, message, work) {
+  return async event => {
+    if (event) event.preventDefault();
+    button.disabled = true;
+    say(message, "");
+    try { await work(); }
+    catch (error) { say(message, error.message, "bad"); }
+    button.disabled = false;
+  };
+}
+
+async function showStatus() {
+  const box = h("div");
+  const query = h("input", { type: "text", placeholder: "Search" });
+  const find = h("button", null, "Search");
+  const message = h("div", { className: "msg" });
+  const results = h("div");
+  find.addEventListener("click", guarded(find, message, async () => {
+    results.replaceChildren();
+    const found = await api("search", "POST", { query: query.value });
+    if (!found.results.length) say(message, "No results");
+    results.append(...found.results.map(r => h("div", { className: "result" },
+      h("strong", null, r.citation.source_id + " / " + r.citation.path), " ",
+      h("span", { className: "muted" }, r.citation.anchor || ""),
+      h("p", null, r.text.slice(0, 300)))));
+  }));
+  main.replaceChildren(box, h("h2", null, "Try a search"), h("form", null, h("div", { className: "row" }, query, find)), message, results);
+
+  async function refresh() {
+    const s = await api("status");
+    const total = key => s.sources.reduce((sum, x) => sum + (x.files_by_status[key] || 0), 0);
+    const queued = Object.values(s.queue).reduce((sum, q) => sum + (q.queued || 0) + (q.running || 0), 0);
+    const parts = [
+      h("h2", null, "Index"),
+      table([["Indexed", "num"], ["Pending", "num"], ["Failed", "num"], ["Jobs running or queued", "num"], ["Webhook failed", "num"]], [h("tr", null,
+        h("td", { className: "num" }, total("indexed")), h("td", { className: "num" }, total("pending")),
+        h("td", { className: "num " + (s.failed_files ? "bad" : "") }, s.failed_files),
+        h("td", { className: "num" }, queued),
+        h("td", { className: "num " + (s.webhook.dead ? "bad" : "") }, s.webhook.dead || 0))]),
+      h("h2", null, "Sources"),
+      table([["Source"], ["Indexed", "num"], ["Pending", "num"], ["Failed", "num"], ["Last scan"], ["Result"]], s.sources.map(x => h("tr", null,
+        h("td", null, x.source_id),
+        ...["indexed", "pending", "failed"].map(k => h("td", { className: "num" }, x.files_by_status[k] || 0)),
+        h("td", null, when(x.last_scan_at)),
+        x.last_scan_at === null ? h("td", null, "-") : x.last_scan_ok ? h("td", { className: "ok" }, "OK") : h("td", { className: "bad" }, x.last_scan_error || "Failed")))),
+    ];
+    if (s.dead_jobs.length) {
+      parts.push(h("h2", null, "Failed jobs"), table([["File"], ["Error"]], s.dead_jobs.map(j => h("tr", null, h("td", null, j.path), h("td", { className: "bad" }, j.last_error)))));
+    }
+    box.replaceChildren(...parts);
+  }
+  await refresh();
+  timer = setInterval(() => refresh().catch(() => {}), 10000);
+}
+
+async function showSources() {
+  const list = h("div");
+  const message = h("div", { className: "msg" });
+  const formBox = h("div");
+  const add = h("button", null, "Add source");
+  add.addEventListener("click", () => { add.hidden = true; addForm(); });
+
+  async function refresh() {
+    const { connectors } = await api("connectors");
+    list.replaceChildren(table([["ID"], ["Type"], ["Path"], ["Files", "num"], ["Last scan"], ["Result"], [""]], connectors.map(c => {
+      const files = Object.values(c.status.files_by_status).reduce((a, b) => a + b, 0);
+      const scan = h("button", null, "Scan");
+      scan.addEventListener("click", guarded(scan, message, async () => {
+        await api("connectors/" + encodeURIComponent(c.id) + "/scan", "POST");
+        say(message, "Scan requested for " + c.id, "ok");
+      }));
+      const remove = h("button", null, "Delete");
+      remove.addEventListener("click", guarded(remove, message, async () => {
+        if (!confirm("Delete " + c.id + " and its index? Source files are not touched.")) return;
+        await api("connectors/" + encodeURIComponent(c.id), "DELETE");
+        say(message, "Deleted " + c.id, "ok");
+        await refresh();
+      }));
+      return h("tr", null, h("td", null, c.id), h("td", null, c.spec ? c.spec.type : "config file"),
+        h("td", null, c.spec ? c.spec.root_path : "-"), h("td", { className: "num" }, files), h("td", null, when(c.status.last_scan_at)),
+        c.status.last_scan_at === null ? h("td", null, "-") : c.status.last_scan_ok ? h("td", { className: "ok" }, "OK") : h("td", { className: "bad" }, c.status.last_scan_error || "Failed"),
+        h("td", { className: "actions" }, scan, c.origin === "api" ? remove : null));
+    })));
+  }
+
+  async function addForm() {
+    const { types } = await api("connector-types");
+    const id = h("input", { type: "text", placeholder: "team-docs" });
+    const type = h("select", null, types.map(t => h("option", { value: t.type, selected: t.type === "s3" }, t.type + " - " + t.description)));
+    const path = h("input", { type: "text", placeholder: "bucket/folder or share/folder" });
+    const tags = h("input", { type: "text", placeholder: "team:ops, type:manual" });
+    const interval = h("input", { type: "text", value: "15m" });
+    const optionsBox = h("div");
+    const formMessage = h("div", { className: "msg" });
+    let fields = [];
+
+    async function loadOptions() {
+      const detail = await api("connector-types/" + encodeURIComponent(type.value));
+      fields = detail.options.map(option => {
+        const listId = "examples-" + option.name;
+        const input = h("input", { type: "text", title: option.help, placeholder: option.secret ? "DOCLIB_CRED_..." : "" });
+        if (option.examples.length && !option.secret) input.setAttribute("list", listId);
+        return { option, input, label: h("label", null,
+          h("span", null, option.name + (option.required ? " *" : "") + (option.secret ? " (env var)" : "")), input,
+          option.examples.length && !option.secret ? h("datalist", { id: listId }, option.examples.map(v => h("option", { value: v }))) : null) };
+      });
+      const common = fields.filter(f => f.option.required || COMMON.has(f.option.name));
+      const others = fields.filter(f => !common.includes(f));
+      optionsBox.replaceChildren(...common.map(f => f.label),
+        ...(others.length ? [h("details", null, h("summary", null, "More options"), others.map(f => f.label))] : []));
+    }
+
+    function definition() {
+      const options = {}, credentials = {};
+      for (const { option, input } of fields) {
+        const value = input.value.trim();
+        if (value) (option.secret ? credentials : options)[option.name] = value;
+      }
+      return { id: id.value.trim(), type: type.value, root_path: path.value.trim(), options, credentials,
+               scan_interval: interval.value.trim() || "15m",
+               tags: tags.value.split(",").map(t => t.trim()).filter(Boolean) };
+    }
+
+    const test = h("button", { type: "button" }, "Test");
+    test.addEventListener("click", guarded(test, formMessage, async () => {
+      const result = await api("connectors/test", "POST", definition());
+      if (result.ok) say(formMessage, "Connected", "ok"); else say(formMessage, result.message || "Could not connect", "bad");
+    }));
+    const save = h("button", { type: "button" }, "Save");
+    save.addEventListener("click", guarded(save, formMessage, async () => {
+      await api("connectors", "POST", definition());
+      formBox.replaceChildren();
+      add.hidden = false;
+      say(message, "Added. Scanning has started.", "ok");
+      await refresh();
+    }));
+    const cancel = h("button", { type: "button", onclick: () => { formBox.replaceChildren(); add.hidden = false; } }, "Cancel");
+    type.addEventListener("change", () => loadOptions().catch(error => say(formMessage, error.message, "bad")));
+    await loadOptions();
+    const field = (text, input) => h("label", null, h("span", null, text), input);
+    formBox.replaceChildren(h("h2", null, "Add source"), h("form", { onsubmit: e => e.preventDefault() },
+      field("ID *", id), field("Type *", type), field("Path *", path), optionsBox, field("Tags", tags), field("Scan every", interval),
+      test, save, cancel), formMessage);
+  }
+
+  main.replaceChildren(h("h2", null, "Sources"), list, message, add, formBox);
+  await refresh();
+}
+
+async function showWebhook() {
+  const enabled = h("input", { type: "checkbox" });
+  const url = h("input", { type: "text", placeholder: "https://" });
+  const secret = h("input", { type: "text", placeholder: "DOCLIB_CRED_WEBHOOK_SECRET" });
+  const message = h("div", { className: "msg" });
+  const history = h("div");
+  const form = () => ({ enabled: enabled.checked, url: url.value, secret_env: secret.value });
+
+  function render(data) {
+    history.replaceChildren(
+      h("h2", null, "Recent deliveries"),
+      data.deliveries.length
+        ? table([["Time"], ["Message"], ["Status"], ["Tries", "num"], ["Error"]], data.deliveries.map(d => h("tr", null,
+            h("td", null, when(d.created_at)), h("td", null, d.text),
+            h("td", { className: d.status === "dead" ? "bad" : d.status === "sent" ? "ok" : "" }, d.status === "dead" ? "failed" : d.status),
+            h("td", { className: "num" }, d.attempts), h("td", null, d.last_error || ""))))
+        : h("p", { className: "muted" }, "None yet"));
+    if (data.deliveries.some(d => d.status === "dead")) {
+      const retry = h("button", null, "Retry failed");
+      retry.addEventListener("click", guarded(retry, message, async () => {
+        const result = await api("webhook/retry", "POST");
+        say(message, "Retrying " + result.retried, "ok");
+        render(await api("webhook"));
+      }));
+      history.append(retry);
+    }
+    if (data.problem) say(message, data.problem, "bad");
+  }
+
+  const data = await api("webhook");
+  enabled.checked = data.enabled;
+  url.value = data.url || "";
+  secret.value = data.secret_env || "";
+  const save = h("button", { type: "button" }, "Save");
+  save.addEventListener("click", guarded(save, message, async () => {
+    render(await api("webhook", "PUT", form()));
+    say(message, "Saved", "ok");
+  }));
+  const test = h("button", { type: "button" }, "Send test");
+  test.addEventListener("click", guarded(test, message, async () => {
+    const result = await api("webhook/test", "POST", form());
+    if (result.ok) say(message, "Delivered (HTTP " + result.status + ")", "ok");
+    else say(message, "Failed: " + (result.status ? "HTTP " + result.status : result.error), "bad");
+  }));
+  main.replaceChildren(h("h2", null, "Webhook"), h("form", { onsubmit: e => e.preventDefault() },
+    h("label", { className: "check" }, enabled, h("span", null, "Enabled")),
+    h("label", null, h("span", null, "URL"), url),
+    h("label", null, h("span", null, "Signing secret (env var, optional)"), secret),
+    save, test), message, history);
+  render(data);
+}
+
+async function showModels() {
+  const data = await api("models");
+  const state = text => h("td", { className: text === "unreachable" ? "bad" : text === "reachable" ? "ok" : "" }, text);
+  main.replaceChildren(h("h2", null, "Models"),
+    table([["Role"], ["Model"], ["Address"], ["State"]], data.models.map(m => h("tr", null,
+      h("td", null, m.role), h("td", null, m.model || "-"), h("td", null, m.endpoint || "-"), state(m.state)))),
+    h("h2", null, "Chunks by embedding model"),
+    table([["Model"], ["Chunks", "num"]], Object.entries(data.chunks_by_model).map(([name, count]) => h("tr", null,
+      h("td", null, name === "null" ? "-" : name), h("td", { className: "num" }, count)))));
+}
+
+async function route() {
+  clearInterval(timer);
+  const name = PAGES[location.hash.slice(1)] ? location.hash.slice(1) : "status";
+  document.getElementById("nav").replaceChildren(...Object.entries(PAGES).map(([key, [label]]) =>
+    h("a", { href: "#" + key, className: key === name ? "on" : "" }, label)));
+  main.replaceChildren(h("p", { className: "muted" }, "Loading"));
+  try { await PAGES[name][1](); }
+  catch (error) { main.replaceChildren(h("p", { className: "bad" }, error.message)); }
+}
+
+window.addEventListener("hashchange", route);
+route();
+</script>
+</body>
+</html>

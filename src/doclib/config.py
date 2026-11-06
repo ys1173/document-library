@@ -245,6 +245,12 @@ class AdminMcpConfig(Strict):
     profiles: dict[str, ConnectionProfile] = Field(default_factory=dict)
 
 
+class PortalConfig(Strict):
+    """The web portal on the admin port. It asks for a login only if DOCLIB_PORTAL_PASSWORD is set."""
+
+    enabled: bool = True
+
+
 class AdminConfig(Strict):
     """The service-to-service admin API (connectors). Separate from the agent-facing API, on its own port."""
 
@@ -253,6 +259,7 @@ class AdminConfig(Strict):
     auth: AuthConfig = Field(default_factory=AuthConfig)
     required_scope: str = "doclib:admin"  # In bearer mode, tokens must carry this in their `scope` claim.
     mcp: AdminMcpConfig = Field(default_factory=AdminMcpConfig)
+    portal: PortalConfig = Field(default_factory=PortalConfig)
 
     @model_validator(mode="after")
     def _mcp_needs_tokens(self) -> AdminConfig:

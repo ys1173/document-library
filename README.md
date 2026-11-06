@@ -8,6 +8,7 @@ The service indexes documents where they already live (file shares, SharePoint, 
 
 - **Connect to almost any storage with a few lines of config.** Adapters are built on [rclone](https://rclone.org/overview/), so SMB shares, SharePoint, S3, SeaweedFS, SFTP, WebDAV, Google Drive and many more all work the same way. A new connection is a short declarative definition, in a config file or through one API call, with no code to write.
 - **Swap in better models as they appear.** The text extractor, vision model and embedding model are all replaceable through configuration, and each can run on this machine, on a remote GPU or as a service you already have. When a better extraction model comes out, you can switch to it without rebuilding the system.
+- **A simple web portal** for checking status, adding sources and setting where webhooks go.
 - **Agents connect over MCP.** Agents get search and reading as MCP tools, and the same API is available over REST. If you choose, a trusted setup agent can also add sources over MCP, limited to locations you've approved.
 - **Exact references.** Every result says which document and which page, slide, sheet or section it came from, and that reference opens the live file.
 - **Semantic and keyword search together**, with results across languages.
@@ -19,6 +20,7 @@ The service indexes documents where they already live (file shares, SharePoint, 
 
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
+- [The web portal](#the-web-portal)
 - [Using your own documents](#using-your-own-documents)
 - [Connecting an agent over MCP](#connecting-an-agent-over-mcp)
 - [What agents get back](#what-agents-get-back)
@@ -188,7 +190,7 @@ Your index is kept for next time. To delete it as well, use `scripts/down.sh --d
 | Worker | `doclib worker` | Reads each changed file, extracts and chunks it, gets embeddings, and swaps it into the index atomically |
 | Vision worker | `doclib vlm-worker` | Optional. Upgrades scanned pages in the background |
 | API | `doclib api` | Read-only search and reading for agents, on port 8080 |
-| Admin API | `doclib admin-api` | Connector management for other services, on port 8081 |
+| Admin API | `doclib admin-api` | Web portal and connector management for other services, on port 8081 |
 
 **Files aren't stored.** They're read into memory, processed and discarded. The database holds only the index, so you can delete it and rebuild it from the drive at any time.
 
@@ -197,6 +199,29 @@ Your index is kept for next time. To delete it as well, use `scripts/down.sh --d
 1. **Text extraction** runs first on every page. Pages it handles well stop here and are never sent to a vision model.
 2. **OCR** runs straight away on pages that need more help, so the file is searchable immediately. Those are pages with little or no text, pages that are mostly images, pages with messy tables, and garbled pages. Image files always take this route.
 3. **The vision model**, if enabled, then upgrades those pages in the background. It can't overwrite good text with something much shorter.
+
+## The web portal
+
+Open <http://localhost:8081> once the service is running.
+
+| Page | What you can do |
+|---|---|
+| Status | See indexing progress, failures and each source's last scan, and try a search |
+| Sources | Add a source, test its connection, scan now, or delete it |
+| Webhook | Set the URL and signing secret, send a test, and see recent deliveries |
+| Models | See which models are in use and whether they're reachable. This page is read-only |
+
+**Login:** there's no login by default, because the portal is meant for an internal network. For a basic one, set a password when starting, and the browser will ask for it:
+
+```bash
+DOCLIB_PORTAL_PASSWORD=choose-a-password scripts/up.sh
+```
+
+The username is `admin`, or whatever you set in `DOCLIB_PORTAL_USERNAME`. With Helm, put these variables in the Secret named by `secrets.connectorEnv`.
+
+The password and the admin API's tokens are separate. The password protects only the portal, and tokens protect only the REST API and admin MCP tools. So set both if people you don't trust can reach port 8081. To turn the portal off, set `admin.portal.enabled: false`.
+
+**Credentials:** the portal only ever asks for the name of an environment variable, as described under [Credentials](#credentials). A new variable still has to be added to the service and needs a restart.
 
 ## Using your own documents
 
@@ -550,6 +575,10 @@ Connect directly, or through PgBouncer in session mode. The scanner uses session
 
 Every detected change is indexed automatically and reported through one generic webhook. Your receiver decides what to do with it, such as posting to Slack, sending email or opening a ticket.
 
+The easiest way to set it up is the Webhook page of the [portal](#the-web-portal). Changes apply within seconds, with no restart. Settings saved there replace the ones in the config file. Changes made while the webhook is off are not sent later.
+
+You can also set it in the config file:
+
 ```yaml
 notifications:
   webhook:
@@ -650,6 +679,8 @@ src/doclib/          The service
   api.py             Agent-facing API
   admin_api.py       Connector API
   admin_mcp.py       Optional connector tools for a setup agent
+  portal.py          Web portal backend
+  portal.html        Web portal page
   connectors.py      Connector validation, using rclone's catalogue
   rclone.py          Read-only source access
   notify.py          Webhook notifications
@@ -690,7 +721,7 @@ The embedding service can't be reached, so search is running on keywords only. R
 
 ## Current status and limits
 
-The core service is built and tested, including connectors, notifications, both MCP servers and the vision service. 270 tests pass, and the full stack passes its end-to-end checks with real models.
+The core service is built and tested, including connectors, notifications, the web portal, both MCP servers and the vision service. 288 tests pass, and the full stack passes its end-to-end checks with real models.
 
 **Not yet tested on real systems:**
 

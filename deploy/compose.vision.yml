@@ -31,8 +31,14 @@ services:
     depends_on:
       migrate: {condition: service_completed_successfully}
 
-  # Workers must know vision is on, so they queue upgrades for hard pages.
+  # Workers must know vision is on, so they queue upgrades for hard pages. The others report its state.
   worker:
+    environment:
+      DOCLIB_EXTRACTION__VLM__ENABLED: "true"
+  api:
+    environment:
+      DOCLIB_EXTRACTION__VLM__ENABLED: "true"
+  admin:
     environment:
       DOCLIB_EXTRACTION__VLM__ENABLED: "true"
 

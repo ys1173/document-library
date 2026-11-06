@@ -11,9 +11,11 @@ import asyncio
 import hashlib
 import hmac
 import json
+import os
 import time
 import uuid
 from collections import Counter
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -159,19 +161,52 @@ async def deliver_due(pool: asyncpg.Pool, config: WebhookConfig, client: httpx.A
     return sent
 
 
+@dataclass(frozen=True)
+class WebhookTarget:
+    enabled: bool
+    url: str | None
+    secret: str | None
+    secret_env: str | None  # Name of the variable holding the signing secret, if set from the portal.
+    origin: str  # portal or config
+    problem: str | None = None  # Set when it can't safely send.
+
+
+async def load_target(pool: asyncpg.Pool, config: WebhookConfig) -> WebhookTarget:
+    """Settings saved from the portal win over the config file. Read on every poll, so a change needs no restart."""
+    saved = await pool.fetchval("select value from doclib.settings where key = 'webhook'")
+    if saved is None:
+        return WebhookTarget(config.enabled, config.resolve_url() if config.enabled else None,
+                             config.resolve_secret() if config.enabled else None, None, "config")
+    secret_env = saved.get("secret_env")
+    secret = os.environ.get(secret_env) if secret_env else config.resolve_secret()
+    # Never fall back to sending unsigned when signing was asked for.
+    problem = f"{secret_env} is not set on this service" if secret_env and not secret else None
+    return WebhookTarget(saved["enabled"], saved.get("url"), secret, secret_env, "portal", problem)
+
+
+async def poll_once(pool: asyncpg.Pool, config: WebhookConfig, client: httpx.AsyncClient, target: WebhookTarget) -> None:
+    if target.enabled and target.url and not target.problem:
+        await compile_digests(pool, config)
+        await deliver_due(pool, config, client, target.url, target.secret)
+
+
 async def run_forever(pool: asyncpg.Pool, settings: Settings) -> None:
     config = settings.notifications.webhook
-    url = config.resolve_url() if config.enabled else None
-    if not url:
-        event("webhook.disabled")
-        return
-    secret = config.resolve_secret()
-    event("webhook.enabled", signed=bool(secret))
+    state: tuple[bool, bool, str | None] | None = None
     async with httpx.AsyncClient() as client:
         while True:
             try:
-                await compile_digests(pool, config)
-                await deliver_due(pool, config, client, url, secret)
+                target = await load_target(pool, config)
+                current = (bool(target.enabled and target.url), bool(target.secret), target.problem)
+                if current != state:
+                    if target.problem:
+                        event("webhook.misconfigured", level=40, error=target.problem)
+                    elif current[0]:
+                        event("webhook.enabled", signed=current[1], origin=target.origin)
+                    else:
+                        event("webhook.disabled", origin=target.origin)
+                    state = current
+                await poll_once(pool, config, client, target)
             except (OSError, asyncpg.PostgresError) as exc:
                 event("webhook.loop_error", level=40, error=safe_error(exc))
             await asyncio.sleep(POLL_S)

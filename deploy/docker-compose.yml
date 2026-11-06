@@ -71,6 +71,11 @@ services:
     # Connector management for other services. Published on localhost only: never make it reachable by ordinary agents.
     <<: *doclib
     command: ["admin-api"]
+    environment:
+      <<: *doclib-env
+      # The portal asks for a login only if a password is set when starting.
+      DOCLIB_PORTAL_USERNAME: ${DOCLIB_PORTAL_USERNAME:-admin}
+      DOCLIB_PORTAL_PASSWORD: ${DOCLIB_PORTAL_PASSWORD:-}
     secrets: [doclib_worker_dsn]
     depends_on:
       migrate: {condition: service_completed_successfully}
