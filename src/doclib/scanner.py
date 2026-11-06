@@ -226,7 +226,7 @@ async def maintenance(pool: asyncpg.Pool, settings: Settings) -> None:
         settings.notifications.webhook.event_retention_days)
     await pool.execute(
         "delete from doclib.webhook_deliveries where status <> 'pending' and created_at < now() - make_interval(days => $1) "
-        "and not exists (select 1 from doclib.change_events e where e.delivery_id = delivery_id)",
+        "and not exists (select 1 from doclib.change_events e where e.delivery_id = doclib.webhook_deliveries.delivery_id)",
         settings.notifications.webhook.event_retention_days)
     for row in await pool.fetch("select status, count(*) n from doclib.files group by status"):
         telemetry.files_by_status.set(row["n"], {"status": row["status"]})

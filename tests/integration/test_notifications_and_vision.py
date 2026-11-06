@@ -10,7 +10,7 @@ import pytest
 
 from doclib import notify, queue
 from doclib.config import WebhookConfig
-from doclib.scanner import scan_source
+from doclib.scanner import maintenance, scan_source
 from doclib.vlm import VlmClient, vlm_reachable
 from doclib.vlm_worker import drain as drain_vlm
 from doclib.worker import drain
@@ -302,3 +302,26 @@ async def test_vision_cannot_overwrite_good_text_with_less(tmp_path):
     long_text = "Vision text. " * 200
     used = await extract_document(data, "g.pdf", forced, vlm_pages={1: long_text, 2: long_text})
     assert used.pages[0].extraction_path == "vlm"
+
+
+async def test_maintenance_removes_only_old_finished_deliveries(indexed, settings):
+    async def delivery(status: str, age_days: int) -> str:
+        return await indexed.fetchval(
+            "insert into doclib.webhook_deliveries (delivery_id, tenant_id, source_id, payload, status, created_at) "
+            "values (gen_random_uuid(), 'acme', 'ops', '{}', $1, now() - make_interval(days => $2)) returning delivery_id::text",
+            status, age_days)
+
+    old = settings.notifications.webhook.event_retention_days + 1
+    old_sent, old_dead = await delivery("sent", old), await delivery("dead", old)
+    kept = {await delivery("pending", old), await delivery("sent", 1)}
+    # An old delivery still has a recent event pointing at it, so it has to stay.
+    linked = await delivery("sent", old)
+    kept.add(linked)
+    await indexed.execute(
+        "insert into doclib.change_events (tenant_id, source_id, scan_id, file_id, change, path, content_version, state, outcome, delivery_id) "
+        "select 'acme', 'ops', gen_random_uuid(), file_id, 'changed', path, 'v', 'ready', 'indexed', $1::uuid from doclib.files limit 1", linked)
+
+    await maintenance(indexed, settings)
+
+    left = {r["id"] for r in await indexed.fetch("select delivery_id::text id from doclib.webhook_deliveries")}
+    assert left == kept and not {old_sent, old_dead} & left

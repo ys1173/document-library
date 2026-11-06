@@ -721,7 +721,7 @@ The embedding service can't be reached, so search is running on keywords only. R
 
 ## Current status and limits
 
-The core service is built and tested, including connectors, notifications, the web portal, both MCP servers and the vision service. 288 tests pass, and the full stack passes its end-to-end checks with real models.
+The core service is built and tested, including connectors, notifications, the web portal, both MCP servers and the vision service. 289 tests pass, and the full stack passes its end-to-end checks with real models.
 
 **Not yet tested on real systems:**
 
